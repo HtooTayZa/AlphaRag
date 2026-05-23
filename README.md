@@ -1,3 +1,9 @@
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+# AlphaRag
+=======
+>>>>>>> 5bfa6cc (first commit)
 # AlphaRAG: Institutional Knowledge Extractor
 
 > Enterprise-grade financial document analysis powered by Parent-Child RAG, Groq (LLaMA-3 70B), BAAI/bge-m3 embeddings, and Qdrant.
@@ -200,3 +206,7 @@ DOCUMENT_METADATA_CATALOGUE = {
 ## License
 
 MIT — see `LICENSE` for details.
+<<<<<<< HEAD
+=======
+>>>>>>> b7e2213 (initial commit)
+>>>>>>> 5bfa6cc (first commit)
