@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+venv/
+env/
+.venv/
+data/raw_filings/
+data/qdrant_db/
+.chainlit/
