@@ -157,8 +157,8 @@ def build_embeddings() -> HuggingFaceEmbeddings:
         encode_kwargs={
             "normalize_embeddings": True,
             "batch_size": 32,
-        },
-        query_instruction=config.BGE_QUERY_INSTRUCTION,
+        }
+        # Removed query_instruction as it is no longer supported in this class version
     )
 
 
@@ -178,7 +178,7 @@ def build_qdrant_vector_store(embeddings: HuggingFaceEmbeddings) -> QdrantVector
         logger.info(f"  🆕 Creating Qdrant collection: '{config.COLLECTION_NAME}'")
         client.create_collection(
             collection_name=config.COLLECTION_NAME,
-            vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
     else:
         logger.info(f"  ♻️  Reusing existing Qdrant collection: '{config.COLLECTION_NAME}'")

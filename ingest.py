@@ -180,6 +180,9 @@ def create_demo_pdf(pdf_dir: Path) -> None:
 
         pdf = FPDF()
         pdf.add_page()
+        
+        # Explicitly set safe margins to prevent horizontal space errors
+        pdf.set_margins(left=15, top=15, right=15)
         pdf.set_font("Helvetica", size=12)
         pdf.set_title("Project Alpha Research Report (Demo)")
 
@@ -210,11 +213,8 @@ For the upcoming year, we plan to scale the model to an additional 50 facilities
 Our secondary goal is to open-source the core algorithms for community peer review.
         """.strip()
 
-        for line in demo_text.split("\n"):
-            if line.strip():
-                pdf.multi_cell(0, 8, line.strip())
-            else:
-                pdf.ln(4)
+        # Let fpdf2 handle the line breaks and cursor position automatically
+        pdf.multi_cell(w=0, h=8, text=demo_text)
 
         demo_path = pdf_dir / "project_alpha_demo.pdf"
         pdf.output(str(demo_path))

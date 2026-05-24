@@ -83,18 +83,18 @@ QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY")
 # ------------------------------------------------------------------------------
 
 # --- LLM (Groq) ---
-# Default: llama3-70b-8192 (Recommended for complex reasoning and factual accuracy)
-LLM_MODEL_NAME: str = os.environ.get("LLM_MODEL_NAME", "llama3-70b-8192")
-LLM_TEMPERATURE: float = 0.0          # Zero temperature enforces deterministic, factual outputs
-LLM_MAX_TOKENS: int = 2048            # Maximum tokens for the generated response
+# Optimized for Groq's Free Tier to ensure maximum stability and speed
+LLM_MODEL_NAME: str = os.environ.get("LLM_MODEL_NAME", "llama-3.1-8b-instant")
+LLM_TEMPERATURE: float = 0.0          # Keeps output deterministic and strictly grounded
+LLM_MAX_TOKENS: int = 2048
 
 # --- Embeddings (HuggingFace) ---
 # Default: BAAI/bge-m3 (Multilingual, handles financial jargon well, 1024-dim)
-EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
+EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DEVICE: str = os.environ.get("EMBEDDING_DEVICE", "cpu")
 
 # BGE models require a specific query instruction prefix to optimize retrieval
-BGE_QUERY_INSTRUCTION: str = "Represent this sentence for searching relevant passages: "
+BGE_QUERY_INSTRUCTION: str = ""
 
 # --- Vector Store ---
 COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "alpharag_general_docs")
