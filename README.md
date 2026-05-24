@@ -1,9 +1,3 @@
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
-# AlphaRag
-=======
->>>>>>> 5bfa6cc (first commit)
 # AlphaRAG: Institutional Knowledge Extractor
 
 > Enterprise-grade financial document analysis powered by Parent-Child RAG, Groq (LLaMA-3 70B), BAAI/bge-m3 embeddings, and Qdrant.
