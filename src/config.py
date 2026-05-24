@@ -2,9 +2,13 @@
 # ==============================================================================
 # AlphaRAG: Centralized Configuration
 # ==============================================================================
-# All tunable parameters, model identifiers, prompt templates, and paths live
-# here. This is the single source of truth — no magic strings elsewhere.
-# ==============================================================================
+"""
+Central configuration module for AlphaRAG.
+
+This module loads environment variables, defines system-wide constants, file paths, 
+model parameters, and core prompts. Centralizing these values ensures consistency 
+across ingestion, retrieval, and UI layers.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env file values into the environment at import time.
-# This makes config.py safe to import first in any module.
 load_dotenv()
 
 
@@ -25,37 +28,53 @@ load_dotenv()
 # Root of the alpharag/ project directory
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
-# Where raw PDF filings are stored (not committed to git)
+# Where raw PDF filings are stored prior to ingestion
 RAW_PDFS_DIR: Path = PROJECT_ROOT / "data" / "raw_pdfs"
 
-# Qdrant persists its on-disk index here
+# Vector storage path: Qdrant persists its on-disk index here
 QDRANT_PATH: Path = PROJECT_ROOT / "data" / "qdrant_db"
 
+# Document storage path: Local fallback for LangChain's docstore to persist parent chunks
+LOCAL_DOCSTORE_PATH: Path = PROJECT_ROOT / "data" / "local_docstore"
+
+
 # ------------------------------------------------------------------------------
-# API Keys  — read from environment; raise early if missing
+# API Keys & Credentials
 # ------------------------------------------------------------------------------
 
 def _require_env(key: str) -> str:
-    """Fetch a required environment variable or raise a descriptive error."""
+    """
+    Fetch a required environment variable or raise a descriptive error.
+    
+    Args:
+        key: The name of the environment variable.
+        
+    Returns:
+        The string value of the environment variable.
+        
+    Raises:
+        EnvironmentError: If the variable is missing or empty.
+    """
     value = os.environ.get(key)
     if not value:
         raise EnvironmentError(
             f"[AlphaRAG] Missing required environment variable: '{key}'. "
-            f"Please copy .env.example → .env and fill in your credentials."
+            f"Please ensure it is set in your .env file or environment."
         )
     return value
 
-
 def get_groq_api_key() -> str:
+    """Retrieve the Groq API key."""
     return _require_env("GROQ_API_KEY")
 
-
 def get_hf_token() -> str | None:
-    """HuggingFace token is optional for public models but avoids rate limits."""
+    """
+    Retrieve the HuggingFace token. 
+    Optional for public models, but recommended to avoid rate limits.
+    """
     return os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
-
-# Optional Qdrant Cloud overrides — falls back to local mode if absent
+# Optional Qdrant Cloud overrides — falls back to local embedded mode if absent
 QDRANT_URL: str | None = os.environ.get("QDRANT_URL")
 QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY")
 
@@ -65,65 +84,47 @@ QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY")
 # ------------------------------------------------------------------------------
 
 # --- LLM (Groq) ---
-# llama3-70b-8192  : Best reasoning quality, recommended for production
-# mixtral-8x7b-32768: Larger context window (32k), useful for very long docs
+# Default: llama3-70b-8192 (Recommended for complex reasoning and factual accuracy)
 LLM_MODEL_NAME: str = os.environ.get("LLM_MODEL_NAME", "llama3-70b-8192")
-LLM_TEMPERATURE: float = 0.0          # Zero temperature → deterministic, factual
-LLM_MAX_TOKENS: int = 2048            # Max tokens in the generated answer
+LLM_TEMPERATURE: float = 0.0          # Zero temperature enforces deterministic, factual outputs
+LLM_MAX_TOKENS: int = 2048            # Maximum tokens for the generated response
 
 # --- Embeddings (HuggingFace) ---
-# BAAI/bge-m3: State-of-the-art multilingual embeddings, 1024-dim output
-# Excellent for financial text — handles abbreviations, numbers, and jargon
+# Default: BAAI/bge-m3 (Multilingual, handles financial jargon well, 1024-dim)
 EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
 EMBEDDING_DEVICE: str = os.environ.get("EMBEDDING_DEVICE", "cpu")
-# BGE models perform best with this instruction prefix on queries (not docs)
+
+# BGE models require a specific query instruction prefix to optimize retrieval
 BGE_QUERY_INSTRUCTION: str = "Represent this sentence for searching relevant passages: "
 
 # --- Vector Store ---
 COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "alpharag_financial_docs")
 
+
 # ------------------------------------------------------------------------------
 # Parent-Child Chunking Strategy
 # ------------------------------------------------------------------------------
-# The core retrieval architecture uses a two-tier chunking scheme:
-#
-#   ┌─────────────────────────────────────────────────────────┐
-#   │  PARENT CHUNK  (~1500 chars)                            │
-#   │  Broad semantic block — what the LLM reads to answer.   │
-#   │  Stored in an InMemoryStore (docstore).                 │
-#   │                                                         │
-#   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-#   │  │  CHILD   │ │  CHILD   │ │  CHILD   │ │  CHILD   │  │
-#   │  │ (~200c)  │ │ (~200c)  │ │ (~200c)  │ │ (~200c)  │  │
-#   │  │ Indexed  │ │ Indexed  │ │ Indexed  │ │ Indexed  │  │
-#   │  │ in Qdrant│ │ in Qdrant│ │ in Qdrant│ │ in Qdrant│  │
-#   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
-#   └─────────────────────────────────────────────────────────┘
-#
-#  Query → embed query → ANN search finds matching CHILD chunks
-#       → look up their PARENT chunk IDs → fetch full PARENT text
-#       → stuff PARENT chunks into LLM context → generate answer
-#
-# Why? Dense vector search works better on short, focused sentences.
-# But the LLM needs the wider paragraph context to formulate a coherent answer.
+# Architecture overview:
+# 1. Broad PARENT chunks (~1500 chars) are stored on disk. They provide the LLM with context.
+# 2. Dense CHILD chunks (~200 chars) are stored in Qdrant. They optimize vector search accuracy.
 # ------------------------------------------------------------------------------
 
 PARENT_CHUNK_SIZE: int = int(os.environ.get("PARENT_CHUNK_SIZE", "1500"))
-PARENT_CHUNK_OVERLAP: int = 200   # Overlap prevents splitting mid-sentence
+PARENT_CHUNK_OVERLAP: int = 200
 
 CHILD_CHUNK_SIZE: int = int(os.environ.get("CHILD_CHUNK_SIZE", "200"))
-CHILD_CHUNK_OVERLAP: int = 30     # Small overlap for child chunks
+CHILD_CHUNK_OVERLAP: int = 30
 
-# How many child chunks to retrieve from the vector store per query
+# Number of relevant child chunks to retrieve per user query
 TOP_K_RETRIEVAL: int = 6
 
-# ------------------------------------------------------------------------------
-# System Prompt
-# ------------------------------------------------------------------------------
-# This prompt is the guardrail that prevents hallucination. The explicit
-# fallback phrase "Insufficient data in the provided filings." is intentional:
-# it gives downstream consumers a parseable signal for null-result handling.
 
+# ------------------------------------------------------------------------------
+# System Prompt & Guardrails
+# ------------------------------------------------------------------------------
+
+# The guardrail prompt prevents hallucinations and enforces exact citation tracking.
+# Note Rule 5: It explicitly instructs the model to use the "Source File" metadata injected via document formatting.
 SYSTEM_PROMPT: str = (
     "You are a precise financial analyst at an institutional investment firm. "
     "Your role is to extract and synthesize accurate information from SEC filings, "
@@ -134,13 +135,13 @@ SYSTEM_PROMPT: str = (
     "you must reply exactly with: 'Insufficient data in the provided filings.'\n"
     "3. Do NOT guess, infer beyond what is stated, or use outside knowledge.\n"
     "4. When quoting figures, always include the unit (e.g., '$4.2B', '18.3%').\n"
-    "5. If multiple filings are present in the context, attribute each claim to "
-    "its source document explicitly (e.g., 'Per the Tesla 2025 10-K...').\n\n"
+    "5. You MUST explicitly attribute facts to their source document using the 'Source File' "
+    "name provided in the context blocks (e.g., 'According to tsla_2025_10k.pdf...').\n\n"
     "Context blocks:\n"
     "{context}"
 )
 
-# Human-readable application metadata
+# Application Identity
 APP_NAME: str = "AlphaRAG"
 APP_TAGLINE: str = "Institutional Knowledge Extractor"
 APP_VERSION: str = "1.0.0"
