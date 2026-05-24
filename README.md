@@ -196,11 +196,3 @@ DOCUMENT_METADATA_CATALOGUE = {
 | No query logging | Add LangSmith tracing (`LANGCHAIN_TRACING_V2=true`) |
 
 ---
-
-## License
-
-MIT — see `LICENSE` for details.
-<<<<<<< HEAD
-=======
->>>>>>> b7e2213 (initial commit)
->>>>>>> 5bfa6cc (first commit)
