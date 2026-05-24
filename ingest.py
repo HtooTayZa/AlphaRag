@@ -3,12 +3,12 @@
 # ==============================================================================
 # AlphaRAG: Document Ingestion Pipeline (CLI Entry Point)
 # ==============================================================================
-# Run this script ONCE (or whenever new filings are added) to:
+# Run this script ONCE (or whenever new documents are added) to:
 #   1. Load all PDFs from data/raw_pdfs/
-#   2. Split into Parent and Child chunks
-#   3. Embed child chunks with BAAI/bge-m3
-#   4. Persist child embeddings to Qdrant (data/qdrant_db/)
-#   5. Store parent chunks in an InMemoryStore (ephemeral demo)
+#   2. Use Groq/Pydantic to automatically extract document metadata (Title, Author, etc.)
+#   3. Split into Parent and Child chunks
+#   4. Embed child chunks and store in Qdrant (data/qdrant_db/)
+#   5. Store parent chunks locally via EncoderBackedStore (data/local_docstore/)
 #
 # Usage:
 #   python ingest.py                   # Process data/raw_pdfs/ (default)
@@ -51,22 +51,23 @@ console = Console()
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the ingestion script."""
     parser = argparse.ArgumentParser(
         prog="ingest.py",
-        description="AlphaRAG: Ingest financial PDFs into the Qdrant vector database.",
+        description="AlphaRAG: Ingest PDFs into the Qdrant vector database and local docstore.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python ingest.py
-  python ingest.py --pdf-dir /mnt/data/sec_filings
-  python ingest.py --verify --query "What was Tesla's revenue in 2025?"
+  python ingest.py --pdf-dir /mnt/data/my_documents
+  python ingest.py --verify --query "Summarize the main topic of the documents."
         """,
     )
     parser.add_argument(
         "--pdf-dir",
         type=Path,
         default=None,
-        help="Directory containing PDF filings. Defaults to data/raw_pdfs/.",
+        help="Directory containing PDF files. Defaults to data/raw_pdfs/.",
     )
     parser.add_argument(
         "--verify",
@@ -77,7 +78,7 @@ Examples:
     parser.add_argument(
         "--query",
         type=str,
-        default="What was the total revenue and key risk factors mentioned?",
+        default="Summarize the main topic of the documents.",
         help="Verification query to run (only used with --verify).",
     )
     return parser.parse_args()
@@ -85,9 +86,11 @@ Examples:
 
 def print_banner() -> None:
     """Print a styled startup banner to the terminal."""
+    from src import config
+    
     banner = (
-        "[bold cyan]AlphaRAG[/bold cyan]: Institutional Knowledge Extractor\n"
-        "[dim]Document Ingestion Pipeline v1.0.0[/dim]"
+        f"[bold cyan]{config.APP_NAME}[/bold cyan]: {config.APP_TAGLINE}\n"
+        f"[dim]Document Ingestion Pipeline v{config.APP_VERSION}[/dim]"
     )
     console.print(Panel(banner, border_style="cyan", padding=(1, 4)))
 
@@ -118,6 +121,7 @@ def print_config_summary() -> None:
 def run_verification(retriever: object, query: str) -> None:
     """
     Execute a test retrieval against the freshly populated vector store.
+    This proves that vectors in Qdrant successfully link back to parent texts in the local docstore.
 
     Args:
         retriever: The ParentDocumentRetriever returned by ingest_documents().
@@ -140,14 +144,18 @@ def run_verification(retriever: object, query: str) -> None:
 
         for i, doc in enumerate(docs, start=1):
             meta = doc.metadata
-            company  = meta.get("company", "Unknown")
+            
+            # Use the new Pydantic metadata keys
+            title    = meta.get("title", "Unknown Title")
+            author   = meta.get("author_or_company", "Unknown")
             source   = meta.get("source", "N/A")
             page     = meta.get("page_number", meta.get("page", "N/A"))
             preview  = doc.page_content[:300].strip()
 
             console.print(
                 Panel(
-                    f"[dim]Company:[/dim] {company}  |  "
+                    f"[dim]Title:[/dim] {title}  |  "
+                    f"[dim]Author:[/dim] {author}  |  "
                     f"[dim]Source:[/dim] {source}  |  "
                     f"[dim]Page:[/dim] {page}\n\n"
                     f"{preview}…",
@@ -163,67 +171,43 @@ def run_verification(retriever: object, query: str) -> None:
 
 def create_demo_pdf(pdf_dir: Path) -> None:
     """
-    Create a minimal demo PDF if the raw_pdfs directory is empty.
-
-    This uses the built-in reportlab-free approach via fpdf2 or falls back
-    to a plain-text .txt file as a stand-in if no PDF libraries are available.
-    This ensures first-time users can test the pipeline without real SEC filings.
+    Create a minimal, generic demo PDF if the raw_pdfs directory is empty.
+    This ensures first-time users can test the generalized pipeline without providing their own files.
     """
     try:
-        # Try to create a real PDF using fpdf2 (lightweight, no reportlab dep)
+        # Try to create a real PDF using fpdf2
         from fpdf import FPDF  # type: ignore
 
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=12)
-        pdf.set_title("Tesla 2025 10-K (Demo)")
+        pdf.set_title("Project Alpha Research Report (Demo)")
 
+        # A generic, domain-agnostic research report
         demo_text = """
-UNITED STATES SECURITIES AND EXCHANGE COMMISSION
-Washington, D.C. 20549
-FORM 10-K — ANNUAL REPORT
+PROJECT ALPHA: ANNUAL RESEARCH REPORT
+Institute of Advanced Technology
+Date: May 24, 2026
 
-TESLA, INC. — Fiscal Year Ended December 31, 2025
+1. INTRODUCTION
+Project Alpha explores the intersection of artificial intelligence and sustainable workflows.
+This document outlines our findings over the past year. We aim to understand how automation
+can improve efficiency across diverse environments.
 
-ITEM 1. BUSINESS
+2. METHODOLOGY
+Our research team utilized distributed sensor networks to gather data across 14 testing facilities.
+The data was processed using next-generation neural architectures to identify performance gaps
+and optimize resource allocation.
 
-Tesla, Inc. ("Tesla," the "Company," "we," "us" or "our") was incorporated in
-the State of Delaware on July 1, 2003. We design, develop, manufacture, lease
-and sell electric vehicles, energy generation and storage systems, and offer
-services related to our sustainable energy products.
+3. KEY FINDINGS
+- Energy consumption in test facilities dropped by 18% over a 6-month period.
+- The automated resource allocation model achieved a 99.2% uptime.
+- Team productivity increased significantly as repetitive administrative tasks were 
+  offloaded to the intelligent assistant.
 
-ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS
-
-Total Revenues
-For the year ended December 31, 2025, total revenues were $104.2 billion,
-representing a 15% increase from $90.7 billion in fiscal year 2024. Automotive
-revenues contributed $91.8 billion, energy generation and storage revenues were
-$9.6 billion, and services and other revenues were $2.8 billion.
-
-Gross Profit
-Total gross profit for fiscal year 2025 was $18.9 billion, representing a gross
-margin of 18.1%, compared to 17.8% in fiscal year 2024.
-
-ITEM 1A. RISK FACTORS
-
-We face risks related to global supply chain disruptions, increased competition
-in the EV market from both traditional OEMs and new entrants, potential adverse
-changes in government regulations and incentives for electric vehicles, and
-foreign currency fluctuation risks given our international manufacturing
-footprint in Germany and China.
-
-ITEM 8. FINANCIAL STATEMENTS
-
-Consolidated Statement of Operations (in millions):
-  Total revenues:            $104,200
-  Cost of revenues:          $85,280
-  Gross profit:              $18,920
-  Operating expenses:        $11,340
-  Income from operations:    $7,580
-  Net income:                $6,890
-
-The company held $28.4 billion in cash and cash equivalents as of December 31,
-2025, with long-term debt of $5.2 billion.
+4. FUTURE OUTLOOK
+For the upcoming year, we plan to scale the model to an additional 50 facilities.
+Our secondary goal is to open-source the core algorithms for community peer review.
         """.strip()
 
         for line in demo_text.split("\n"):
@@ -232,7 +216,7 @@ The company held $28.4 billion in cash and cash equivalents as of December 31,
             else:
                 pdf.ln(4)
 
-        demo_path = pdf_dir / "tsla_2025_10k.pdf"
+        demo_path = pdf_dir / "project_alpha_demo.pdf"
         pdf.output(str(demo_path))
         console.print(f"[green]📄 Demo PDF created: {demo_path}[/green]")
 
@@ -240,13 +224,13 @@ The company held $28.4 billion in cash and cash equivalents as of December 31,
         # fpdf2 not installed — create a text file as a fallback notice
         notice_path = pdf_dir / "README_ADD_PDFS_HERE.txt"
         notice_path.write_text(
-            "Place your financial PDF filings in this directory.\n"
-            "Filenames like 'tsla_2025_10k.pdf' are auto-tagged with metadata.\n"
+            "Place your PDF documents in this directory.\n"
+            "The LLM will automatically extract metadata from the first page.\n"
             "Install fpdf2 (pip install fpdf2) to auto-generate a demo PDF.\n"
         )
         console.print(
             f"[yellow]⚠ No PDFs found and fpdf2 not installed.[/yellow]\n"
-            f"  Place PDF filings in: {pdf_dir}\n"
+            f"  Place PDF documents in: {pdf_dir}\n"
             f"  Or install fpdf2:  pip install fpdf2"
         )
         sys.exit(1)
@@ -276,7 +260,7 @@ def main() -> None:
     if not pdf_files:
         console.print(
             f"[yellow]📂 No PDFs found in: {pdf_dir}[/yellow]\n"
-            f"   Creating a demo PDF for you…"
+            f"   Creating a generic demo PDF for you…"
         )
         create_demo_pdf(pdf_dir)
         pdf_files = list(pdf_dir.glob("*.pdf"))
@@ -299,7 +283,7 @@ def main() -> None:
         console=console,
         transient=False,
     ) as progress:
-        task = progress.add_task("Ingesting documents…", total=None)
+        task = progress.add_task("Ingesting documents & extracting metadata…", total=None)
 
         try:
             retriever, docstore = ingest_documents(pdf_dir=pdf_dir)
@@ -326,6 +310,7 @@ def main() -> None:
     summary_table.add_row("Time Elapsed",   f"{elapsed:.1f}s")
     summary_table.add_row("PDFs Processed", str(len(pdf_files)))
     summary_table.add_row("Qdrant Path",    str(config.QDRANT_PATH))
+    summary_table.add_row("Local Docstore", str(config.LOCAL_DOCSTORE_PATH))
     summary_table.add_row("Collection",     config.COLLECTION_NAME)
 
     console.print(summary_table)

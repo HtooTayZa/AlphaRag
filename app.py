@@ -39,10 +39,10 @@ async def on_chat_start() -> None:
     """
     await cl.Message(
         content=(
-            f"## 📊 {config.APP_NAME}: {config.APP_TAGLINE}\n\n"
-            "Welcome. I have access to institutional financial filings.\n"
-            "Ask me about revenues, risks, guidance, or any specific data "
-            "from the indexed documents.\n\n"
+            f"## 🤖 {config.APP_NAME}: {config.APP_TAGLINE}\n\n"
+            "Welcome. I have access to your indexed documents.\n"
+            "Ask me any question, and I will extract and synthesize accurate "
+            "information from the provided context.\n\n"
             "---\n"
             "*Initialising retrieval engine…*"
         ),
@@ -58,13 +58,13 @@ async def on_chat_start() -> None:
         cl.user_session.set("rag_chain", rag_chain)
         
         await cl.Message(
-            content="✅ **Ready.** Ask me anything about the indexed filings.",
+            content="**Ready.** Ask me anything about your documents.",
             author=config.APP_NAME,
         ).send()
         
     except FileNotFoundError as e:
         await cl.Message(
-            content=f"⚠️ **Storage not found.** Run `python ingest.py` first.\n\n`{e}`"
+            content=f"**Storage not found.** Run `python ingest.py` first.\n\n`{e}`"
         ).send()
     except Exception as e:
         logger.exception("Initialisation failed")
@@ -120,32 +120,36 @@ async def on_message(message: cl.Message) -> None:
     elements: list[cl.Text] = []
     source_lines: list[str] = []
 
+    # In app.py (inside on_message)
+
     for source in sources:
         idx = source["index"]
         meta = source["metadata"]
         src_file = meta.get("source", "Unknown")
         page = meta.get("page", "N/A")
-        company = meta.get("company", "Unknown")
-        form_type = meta.get("form_type", "N/A")
-        year = meta.get("year", "N/A")
+        
+        # Pull the new metadata variables
+        title = meta.get("title", "Unknown Title")
+        author = meta.get("author", "Unknown")
+        doc_type = meta.get("document_type", "N/A")
+        date = meta.get("date", "N/A")
 
         # Create the visual card for the sidebar
         sidebar_content = (
-            f"**{company}**\n"
-            f"*{form_type} · FY{year}*\n"
+            f"**{title}**\n"
+            f"*{author} · {doc_type} · {date}*\n"
             f"*File:* `{src_file}` | *Page:* {page}\n\n"
             "---\n\n"
             f"{source['content']}"
         )
         
-        # The 'name' must match the inline string exactly to become a clickable link
         element_name = f"Source {idx} ({src_file})"
         elements.append(
             cl.Text(name=element_name, content=sidebar_content, display="side")
         )
         
         # Add to the footer summary
-        source_lines.append(f"`{element_name}` · **{company}** — (Page {page})")
+        source_lines.append(f"`{element_name}` · **{title}** — (Page {page})")
 
     # 4. Finalise the message output
     if sources:

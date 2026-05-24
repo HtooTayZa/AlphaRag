@@ -1,4 +1,3 @@
-# src/config.py
 # ==============================================================================
 # AlphaRAG: Centralized Configuration
 # ==============================================================================
@@ -98,7 +97,7 @@ EMBEDDING_DEVICE: str = os.environ.get("EMBEDDING_DEVICE", "cpu")
 BGE_QUERY_INSTRUCTION: str = "Represent this sentence for searching relevant passages: "
 
 # --- Vector Store ---
-COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "alpharag_financial_docs")
+COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "alpharag_general_docs")
 
 
 # ------------------------------------------------------------------------------
@@ -124,24 +123,18 @@ TOP_K_RETRIEVAL: int = 6
 # ------------------------------------------------------------------------------
 
 # The guardrail prompt prevents hallucinations and enforces exact citation tracking.
-# Note Rule 5: It explicitly instructs the model to use the "Source File" metadata injected via document formatting.
 SYSTEM_PROMPT: str = (
-    "You are a precise financial analyst at an institutional investment firm. "
-    "Your role is to extract and synthesize accurate information from SEC filings, "
-    "earnings transcripts, and financial reports.\n\n"
-    "RULES — follow these absolutely:\n"
-    "1. Answer the user's query using ONLY the provided context blocks.\n"
-    "2. If the answer cannot be explicitly found in the retrieved context, "
-    "you must reply exactly with: 'Insufficient data in the provided filings.'\n"
-    "3. Do NOT guess, infer beyond what is stated, or use outside knowledge.\n"
-    "4. When quoting figures, always include the unit (e.g., '$4.2B', '18.3%').\n"
-    "5. You MUST explicitly attribute facts to their source document using the 'Source File' "
-    "name provided in the context blocks (e.g., 'According to tsla_2025_10k.pdf...').\n\n"
+    "You are a helpful, precise AI assistant. "
+    "Your task is to answer user queries based ONLY on the provided context. "
+    "RULES:\n"
+    "1. If the answer is not in the context, reply: 'I cannot find the answer in the provided documents.'\n"
+    "2. Cite the source file name for every claim you make using the 'Source File' provided in the context blocks.\n"
+    "3. Keep answers concise and strictly grounded in the facts provided.\n\n"
     "Context blocks:\n"
     "{context}"
 )
 
 # Application Identity
 APP_NAME: str = "AlphaRAG"
-APP_TAGLINE: str = "Institutional Knowledge Extractor"
+APP_TAGLINE: str = "General Document Assistant"
 APP_VERSION: str = "1.0.0"

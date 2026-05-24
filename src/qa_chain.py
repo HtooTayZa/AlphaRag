@@ -70,64 +70,35 @@ def build_prompt() -> ChatPromptTemplate:
         ("human", "{input}"),
     ])
 
-
 def _format_docs_for_display(docs: list[Document]) -> list[dict[str, Any]]:
-    """
-    Convert LangChain Documents into JSON-serializable dictionaries.
-    This prepares the metadata for rendering in the Chainlit UI sidebar.
-
-    Args:
-        docs: List of retrieved Document objects.
-
-    Returns:
-        A list of dictionaries containing content and normalized metadata.
-    """
     formatted: list[dict[str, Any]] = []
     for i, doc in enumerate(docs):
         meta = doc.metadata or {}
         formatted.append({
             "index": i + 1,
             "content": doc.page_content,
-            # Create a short preview string for the UI cards
             "preview": doc.page_content[:200].strip() + ("…" if len(doc.page_content) > 200 else ""),
             "metadata": {
-                "company":    meta.get("company",   "Unknown"),
-                "ticker":     meta.get("ticker",    "N/A"),
-                "year":       meta.get("year",      "N/A"),
-                "form_type":  meta.get("form_type", "N/A"),
-                "source":     meta.get("source",    "N/A"),
-                "sector":     meta.get("sector",    "N/A"),
-                "page":       str(meta.get("page_number", meta.get("page", "N/A"))),
+                # Map to the NEW Pydantic fields
+                "title": meta.get("title", "Unknown Title"),
+                "author": meta.get("author_or_company", "Unknown"),
+                "document_type": meta.get("document_type", "Unknown"),
+                "date": meta.get("date_or_year", "Unknown"),
+                "source": meta.get("source", "Unknown"),
+                "page": str(meta.get("page_number", meta.get("page", "N/A"))),
             },
         })
     return formatted
 
-
-# ==============================================================================
-# RAG Chain Builder
-# ==============================================================================
-
 def build_rag_chain(retriever: ParentDocumentRetriever) -> Runnable:
-    """
-    Assemble the LangChain RAG pipeline.
-
-    Crucially, this uses a custom `document_prompt` to inject metadata (like 
-    the source file name) directly into the text the LLM reads. Without this, 
-    the LLM cannot fulfill the system prompt's instruction to cite its sources.
-
-    Args:
-        retriever: A populated ParentDocumentRetriever instance.
-
-    Returns:
-        A LangChain Runnable that accepts {"input": "user query"}.
-    """
     llm = build_llm()
     prompt = build_prompt()
 
-    # Define exactly how each retrieved document is presented to the LLM
+    # Update the prompt template variables to match the new schema
     document_prompt = PromptTemplate.from_template(
         "Source File: {source}\n"
-        "Company: {company}\n"
+        "Title: {title}\n"
+        "Author/Entity: {author_or_company}\n"
         "Page: {page_number}\n"
         "Content:\n{page_content}"
     )

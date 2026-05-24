@@ -1,19 +1,21 @@
-# AlphaRAG: Institutional Knowledge Extractor
+# AlphaRAG: General Document Assistant
 
-> Enterprise-grade financial document analysis powered by Parent-Child RAG, Groq (LLaMA-3 70B), BAAI/bge-m3 embeddings, and Qdrant.
+> Enterprise-grade document analysis powered by Parent-Child RAG, Automated LLM Metadata Extraction, Groq (LLaMA-3 70B), BAAI/bge-m3 embeddings, and Qdrant.
 
 ---
 
 ## Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         ALPHARAG SYSTEM ARCHITECTURE                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │   INGESTION PIPELINE (ingest.py — run once)                             │
 │                                                                         │
-│   PDF Files ──► PyPDFLoader ──► Raw Documents (with metadata)           │
+│   PDF Files ──► PyPDFLoader ──► Page Text                               │
+│                                      │                                  │
+│   Pydantic + Groq LLM ◄── (Extract Title, Author, Date from Page 1)     │
 │                                      │                                  │
 │                              ParentDocumentRetriever                    │
 │                               ┌──────┴──────┐                           │
@@ -21,60 +23,42 @@
 │                    Parent Splitter      Child Splitter                  │
 │                    (~1500 chars)        (~200 chars)                    │
 │                               │             │                           │
-│                        InMemoryStore    BGE-M3 Embed                   │
+│                        LocalFileStore   BGE-M3 Embed                    │
 │                        (docstore)           │                           │
-│                               │           Qdrant                       │
-│                               │         (vector DB)                    │
+│                               │           Qdrant                        │
+│                               │         (vector DB)                     │
 │                                                                         │
 │   QUERY PIPELINE (app.py — per user message)                            │
 │                                                                         │
 │   User Query                                                            │
 │       │                                                                 │
 │       ▼                                                                 │
-│   BGE-M3 Embed ──► ANN Search in Qdrant ──► Top-K CHILD chunks         │
+│   BGE-M3 Embed ──► ANN Search in Qdrant ──► Top-K CHILD chunks          │
 │                                                   │                     │
 │                                          Parent ID lookup               │
 │                                                   │                     │
-│                                        PARENT Documents ◄── docstore   │
+│                                        PARENT Documents ◄── docstore    │
 │                                                   │                     │
-│                                     Stuff into Prompt {context}        │
+│                                     Stuff into Prompt {context}         │
 │                                                   │                     │
-│                                     ChatGroq (LLaMA-3 70B)             │
+│                                     ChatGroq (LLaMA-3 70B)              │
 │                                                   │                     │
 │                                             Answer + Sources            │
 │                                                   │                     │
-│                                        Chainlit UI (app.py)            │
+│                                        Chainlit UI (app.py)             │
 │                                     (Streaming + Citation Sidebar)      │
 └─────────────────────────────────────────────────────────────────────────┘
-```
-
-## Why Parent-Child Chunking?
-
-| Problem | Solution |
-|---|---|
-| Large chunks → embeddings too diluted, poor retrieval precision | Index small **child chunks** (~200 chars) for high-precision ANN search |
-| Small chunks → LLM lacks context to formulate a coherent answer | Feed **parent chunks** (~1500 chars) to the LLM as context |
-| Result | Best of both worlds: precision retrieval + rich generation context |
-
-## File Structure
 
 ```
-alpharag/
-├── .env.example              ← Copy to .env and fill in your keys
-├── .gitignore
-├── requirements.txt
-├── chainlit.md               ← Chainlit welcome page
-├── app.py                    ← Chainlit UI (on_chat_start, on_message)
-├── ingest.py                 ← CLI: process PDFs and build vector DB
-├── data/
-│   ├── raw_pdfs/             ← Drop your PDF filings here
-│   └── qdrant_db/            ← Auto-created by ingest.py
-└── src/
-    ├── __init__.py
-    ├── config.py             ← All constants, model names, system prompt
-    ├── document_parser.py    ← ParentDocumentRetriever setup + PDF loading
-    └── qa_chain.py           ← LangChain RAG chain (Groq LLM + retriever)
-```
+
+## Core Features
+
+| Feature | Description |
+| --- | --- |
+| **Parent-Child Chunking** | Indexes small **child chunks** (~200 chars) for precise vector search, but feeds broad **parent chunks** (~1500 chars) to the LLM to preserve narrative context. |
+| **Automated Metadata** | Uses Pydantic and Groq to read the first page of any ingested PDF and automatically extract the Title, Author, Date, and Document Type. No manual tagging required! |
+| **Zero-Hallucination Citations** | The LLM is strictly prompted to cite its sources, and the UI hooks into these citations to generate interactive, clickable sidebar footnotes. |
+| **True UI Streaming** | Utilizes LangChain's `astream_events` to deliver real-time token streaming to the Chainlit UI. |
 
 ## Quick Start
 
@@ -89,6 +73,7 @@ python -m venv venv
 source venv/bin/activate       # Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
+
 ```
 
 ### 2. Configure environment
@@ -96,6 +81,7 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env and add your GROQ_API_KEY (and optionally HUGGINGFACE_HUB_TOKEN)
+
 ```
 
 Get your free Groq API key at [console.groq.com](https://console.groq.com/keys).
@@ -104,95 +90,58 @@ Get your free Groq API key at [console.groq.com](https://console.groq.com/keys).
 
 ```bash
 mkdir -p data/raw_pdfs
-# Copy your financial PDFs here. Suggested naming:
-# tsla_2025_10k.pdf, nvda_2025_10k.pdf, msft_2025_10k.pdf …
-```
+# Drop ANY pdf files here (Research papers, manuals, legal contracts, etc.)
 
-Filenames matching the pattern `{ticker}_{year}_{form}.pdf` are auto-tagged with structured metadata (company name, sector, form type).
+```
 
 ### 4. Run ingestion
 
 ```bash
-# Basic ingestion
+# Basic ingestion (will auto-extract metadata and build the vector DB)
 python ingest.py
 
 # With verification query
 python ingest.py --verify
 
 # Custom PDF directory
-python ingest.py --pdf-dir /path/to/your/filings
-```
+python ingest.py --pdf-dir /path/to/your/documents
 
-Ingestion only needs to run once per set of documents. The Qdrant DB persists to `data/qdrant_db/`.
+```
 
 ### 5. Launch the UI
 
 ```bash
 chainlit run app.py
+
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in your browser.
+Open [http://localhost:8000](https://www.google.com/search?q=http://localhost:8000) in your browser.
 
 ---
 
 ## Configuration Reference (`src/config.py`)
 
+All parameters can be easily tuned via environment variables or directly in `src/config.py`.
+
 | Parameter | Default | Description |
-|---|---|---|
-| `LLM_MODEL_NAME` | `llama3-70b-8192` | Groq model. Alt: `mixtral-8x7b-32768` for larger context |
-| `LLM_TEMPERATURE` | `0.0` | Deterministic output for factual queries |
+| --- | --- | --- |
+| `LLM_MODEL_NAME` | `llama3-70b-8192` | Groq model. |
 | `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | 1024-dim multilingual embeddings |
 | `PARENT_CHUNK_SIZE` | `1500` chars | Context fed to the LLM |
-| `PARENT_CHUNK_OVERLAP` | `200` chars | Prevents mid-sentence parent splits |
 | `CHILD_CHUNK_SIZE` | `200` chars | Dense retrieval targets |
-| `CHILD_CHUNK_OVERLAP` | `30` chars | Small overlap for child chunks |
 | `TOP_K_RETRIEVAL` | `6` | Child chunks fetched per query |
-| `COLLECTION_NAME` | `alpharag_financial_docs` | Qdrant collection name |
-
-All parameters can be overridden via environment variables in `.env`.
+| `COLLECTION_NAME` | `alpharag_general_docs` | Qdrant collection name |
 
 ---
 
-## Adding New Document Metadata
-
-Edit `DOCUMENT_METADATA_CATALOGUE` in `src/document_parser.py`:
-
-```python
-DOCUMENT_METADATA_CATALOGUE = {
-    "googl_2025_10k": {
-        "company":   "Alphabet Inc.",
-        "ticker":    "GOOGL",
-        "year":      "2025",
-        "form_type": "10-K",
-        "source":    "googl_2025_10k.pdf",
-        "sector":    "Technology / Advertising",
-    },
-    # ... add more entries
-}
 ```
 
----
+### 2. Minor Cosmetic Tweak
+In `src/qa_chain.py`, lines 37-38:
+```python
+    We configure the model with `temperature=0.0` to ensure factual, deterministic
+    responses, which is critical for financial data extraction.
 
-## Switching to Qdrant Cloud
+```
 
-1. Create a free cluster at [cloud.qdrant.io](https://cloud.qdrant.io)
-2. Add to `.env`:
-   ```
-   QDRANT_URL=https://your-cluster.qdrant.io
-   QDRANT_API_KEY=your_api_key
-   ```
-3. Re-run `python ingest.py`
-
----
-
-## Production Considerations
-
-| Limitation | Production Fix |
-|---|---|
-| `InMemoryStore` lost on restart | Replace with `RedisStore` or `SQLStore` |
-| Single Qdrant collection | Separate collections per client/fund |
-| No auth on Chainlit | Enable Chainlit authentication (`@cl.password_auth_callback`) |
-| Synchronous `run_query()` | Use `astream_query()` for true streaming |
-| No query logging | Add LangSmith tracing (`LANGCHAIN_TRACING_V2=true`) |
-
----
+You can simply change that docstring to: `...which is critical for accurate data extraction.`
