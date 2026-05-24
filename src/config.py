@@ -89,7 +89,7 @@ LLM_TEMPERATURE: float = 0.0          # Keeps output deterministic and strictly 
 LLM_MAX_TOKENS: int = 2048
 
 # --- Embeddings (HuggingFace) ---
-# Default: BAAI/bge-m3 (Multilingual, handles financial jargon well, 1024-dim)
+# Default: MiniLM-L6-v2 
 EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DEVICE: str = os.environ.get("EMBEDDING_DEVICE", "cpu")
 

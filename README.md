@@ -1,12 +1,13 @@
 # AlphaRAG: General Document Assistant
 
-> Enterprise-grade document analysis powered by Parent-Child RAG, Automated LLM Metadata Extraction, Groq (LLaMA-3 70B), BAAI/bge-m3 embeddings, and Qdrant.
+> Document question-answering powered by Parent-Child RAG, automated LLM metadata extraction,
+> Groq (LLaMA-3 70B), all-MiniLM-L6-v2 embeddings, and Qdrant.
 
 ---
 
 ## Architecture Overview
 
-```text
+```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         ALPHARAG SYSTEM ARCHITECTURE                    │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -21,9 +22,9 @@
 │                               ┌──────┴──────┐                           │
 │                               ▼             ▼                           │
 │                    Parent Splitter      Child Splitter                  │
-│                    (~1500 chars)        (~200 chars)                    │
+│                    (configurable)       (configurable)                  │
 │                               │             │                           │
-│                        LocalFileStore   BGE-M3 Embed                    │
+│                        LocalFileStore   all-MiniLM-L6-v2                │
 │                        (docstore)           │                           │
 │                               │           Qdrant                        │
 │                               │         (vector DB)                     │
@@ -33,39 +34,105 @@
 │   User Query                                                            │
 │       │                                                                 │
 │       ▼                                                                 │
-│   BGE-M3 Embed ──► ANN Search in Qdrant ──► Top-K CHILD chunks          │
+│   all-MiniLM-L6-v2 ──► ANN Search in Qdrant ──► Top-K child chunks      │
 │                                                   │                     │
 │                                          Parent ID lookup               │
 │                                                   │                     │
-│                                        PARENT Documents ◄── docstore    │
+│                                        Parent documents ◄── docstore    │
 │                                                   │                     │
-│                                     Stuff into Prompt {context}         │
+│                                     Stuff into prompt {context}         │
 │                                                   │                     │
 │                                     ChatGroq (LLaMA-3 70B)              │
 │                                                   │                     │
-│                                             Answer + Sources            │
+│                                       Streamed answer + sources         │
 │                                                   │                     │
 │                                        Chainlit UI (app.py)             │
-│                                     (Streaming + Citation Sidebar)      │
+│                                     (token streaming + citation sidebar)│
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Project Structure
 
 ```
+alpharag/
+├── app.py                  # Chainlit UI and streaming orchestration
+├── ingest.py               # CLI ingestion pipeline
+├── requirements.txt        # Python dependencies
+├── .env.example            # Environment variable template
+├── chainlit.md             # Chainlit welcome message
+├── src/
+│   ├── config.py           # Centralised runtime configuration
+│   ├── document_parser.py  # PDF loading, metadata extraction, chunking, indexing
+│   └── qa_chain.py         # RAG chain construction and async streaming
+└── data/
+    ├── raw_pdfs/           # Place source PDF documents here
+    ├── qdrant_db/          # Auto-created: local Qdrant vector store
+    └── local_docstore/     # Auto-created: parent chunk store
+
+```
+---
+
+## Internal Architecture
+
+| Module                   | Responsibility                                                         |
+|--------------------------|------------------------------------------------------------------------|
+| `src/config.py`          | Centralised runtime configuration; all tunable parameters live here    |
+| `src/document_parser.py` | PDF loading, LLM metadata extraction, parent-child chunking, indexing  |
+| `src/qa_chain.py`        | RAG chain construction and async token streaming via typed generators  |
+| `ingest.py`              | CLI ingestion pipeline with Rich terminal UI and verification support  |
+| `app.py`                 | Chainlit UI, session management, streaming orchestration, citation sidebar |
+
+---
 
 ## Core Features
 
-| Feature | Description |
-| --- | --- |
-| **Parent-Child Chunking** | Indexes small **child chunks** (~200 chars) for precise vector search, but feeds broad **parent chunks** (~1500 chars) to the LLM to preserve narrative context. |
-| **Automated Metadata** | Uses Pydantic and Groq to read the first page of any ingested PDF and automatically extract the Title, Author, Date, and Document Type. No manual tagging required! |
-| **Zero-Hallucination Citations** | The LLM is strictly prompted to cite its sources, and the UI hooks into these citations to generate interactive, clickable sidebar footnotes. |
-| **True UI Streaming** | Utilizes LangChain's `astream_events` to deliver real-time token streaming to the Chainlit UI. |
+### Parent-Child Retrieval
+
+Child chunks (small, dense) are embedded and stored in Qdrant for precise ANN search. When a
+match is found, the system performs a parent ID lookup to retrieve the corresponding full-context
+parent chunk from the local docstore. The LLM receives the broader parent text, preserving
+narrative continuity while benefiting from targeted vector search.
+
+### Automated Metadata Extraction
+
+During ingestion, the first page of each PDF is passed to the Groq LLM via a Pydantic-validated
+prompt. The model extracts the document title, author or organisation, document type, and
+publication date. No manual tagging is required. This metadata is attached to every chunk and
+surfaced in citations at query time.
+
+### Interactive Source Traceability
+
+AlphaRAG attaches expandable sidebar citations to every answer. Each citation includes:
+
+- Document title
+- Author or organisation
+- Document type
+- Publication date
+- File name
+- Page reference
+- Raw source excerpt
+
+This enables transparent, auditable retrieval rather than opaque LLM responses.
+
+### Real-Time Streaming Responses
+
+AlphaRAG streams tokens incrementally to the UI using asynchronous LangChain generators and the
+Chainlit streaming API. The async generator in `src/qa_chain.py` yields either string tokens or
+a final list of source metadata objects. `app.py` consumes this stream, appending tokens to the
+live message via `stream_token` and capturing sources for sidebar rendering once generation
+completes. This enables low-latency conversational interaction even during long retrieval
+operations.
+
+---
 
 ## Quick Start
 
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo-url> alpharag
+git clone https://github.com/HtooTayZa/AlphaRag alpharag
 cd alpharag
 
 # Python 3.10+ required
@@ -73,75 +140,136 @@ python -m venv venv
 source venv/bin/activate       # Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
-
 ```
 
 ### 2. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env and add your GROQ_API_KEY (and optionally HUGGINGFACE_HUB_TOKEN)
-
+# Edit .env and add your GROQ_API_KEY
+# Optionally add HUGGINGFACE_HUB_TOKEN for gated models
 ```
 
-Get your free Groq API key at [console.groq.com](https://console.groq.com/keys).
+Get a free Groq API key at [console.groq.com](https://console.groq.com/keys).
 
 ### 3. Add your PDFs
 
 ```bash
 mkdir -p data/raw_pdfs
-# Drop ANY pdf files here (Research papers, manuals, legal contracts, etc.)
-
+# Place any PDF files here: research papers, manuals, contracts, reports, etc.
 ```
 
 ### 4. Run ingestion
 
 ```bash
-# Basic ingestion (will auto-extract metadata and build the vector DB)
+# Basic ingestion
 python ingest.py
 
-# With verification query
+# Run a verification retrieval query after ingestion
 python ingest.py --verify
 
-# Custom PDF directory
+# Override the PDF source directory
 python ingest.py --pdf-dir /path/to/your/documents
 
+# Custom verification query
+python ingest.py --verify --query "Summarize the key findings."
 ```
+
+If no PDFs are found in the target directory, the ingestion script automatically generates a
+generic demo PDF using `fpdf2` so first-time users can verify the pipeline immediately.
 
 ### 5. Launch the UI
 
 ```bash
 chainlit run app.py
-
 ```
 
-Open [http://localhost:8000](https://www.google.com/search?q=http://localhost:8000) in your browser.
+Open [http://localhost:8000](http://localhost:8000) in your browser.
+
+---
+
+## Ingestion CLI Features
+
+The `ingest.py` script is a fully featured command-line tool, not a bare ingestion script.
+
+- **Rich terminal UI** — startup banner, config summary table, progress spinner, and formatted
+  ingestion summary are rendered using the `rich` library
+- **Config inspection** — active parameters (model names, chunk sizes, paths, collection name)
+  are printed as a table before any processing begins
+- **CLI flags** — `--pdf-dir`, `--verify`, and `--query` allow flexible invocation without
+  editing source files
+- **Demo PDF auto-generation** — if the PDF directory is empty, a generic demo document is
+  created via `fpdf2` to enable immediate pipeline testing
+- **Verification retrieval** — `--verify` runs a full end-to-end retrieval after ingestion,
+  proving that Qdrant vectors correctly resolve back to parent chunks in the local docstore,
+  and prints the retrieved source cards to the terminal
 
 ---
 
 ## Configuration Reference (`src/config.py`)
 
-All parameters can be easily tuned via environment variables or directly in `src/config.py`.
+All parameters are tunable via environment variables or directly in `src/config.py`. Chunk sizes
+are not hardcoded; they are read from config at runtime.
 
-| Parameter | Default | Description |
-| --- | --- | --- |
-| `LLM_MODEL_NAME` | `llama3-70b-8192` | Groq model. |
-| `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | 1024-dim multilingual embeddings |
-| `PARENT_CHUNK_SIZE` | `1500` chars | Context fed to the LLM |
-| `CHILD_CHUNK_SIZE` | `200` chars | Dense retrieval targets |
-| `TOP_K_RETRIEVAL` | `6` | Child chunks fetched per query |
-| `COLLECTION_NAME` | `alpharag_general_docs` | Qdrant collection name |
+| Parameter               | Default                 | Description                               |
+|-------------------------|-------------------------|-------------------------------------------|
+| `LLM_MODEL_NAME`        | `llama3-70b-8192`       | Groq model identifier                     |
+| `EMBEDDING_MODEL_NAME`  | `all-MiniLM-L6-v2`      | 384-dim embedding model     |
+| `EMBEDDING_DEVICE`      | `cpu`                   | Embedding inference device (cpu / cuda)   |
+| `PARENT_CHUNK_SIZE`     | configurable            | Character size of parent context chunks   |
+| `PARENT_CHUNK_OVERLAP`  | configurable            | Overlap between adjacent parent chunks    |
+| `CHILD_CHUNK_SIZE`      | configurable            | Character size of child retrieval targets |
+| `CHILD_CHUNK_OVERLAP`   | configurable            | Overlap between adjacent child chunks     |
+| `TOP_K_RETRIEVAL`       | `6`                     | Number of child chunks fetched per query  |
+| `COLLECTION_NAME`       | `alpharag_general_docs` | Qdrant collection name                    |
+| `QDRANT_PATH`           | `data/qdrant_db`        | Local Qdrant persistence path             |
+| `LOCAL_DOCSTORE_PATH`   | `data/local_docstore`   | Local parent chunk store path             |
+| `RAW_PDFS_DIR`          | `data/raw_pdfs`         | Default PDF source directory              |
 
 ---
 
-```
+## Runtime Requirements
 
-### 2. Minor Cosmetic Tweak
-In `src/qa_chain.py`, lines 37-38:
-```python
-    We configure the model with `temperature=0.0` to ensure factual, deterministic
-    responses, which is critical for financial data extraction.
+- Python 3.10 or higher
+- Groq API key (free tier available)
+- CUDA is optional but recommended for embedding acceleration; CPU inference is supported
+- Approximately 2-4 GB RAM minimum; more is recommended for large document collections
+- Disk space for Qdrant vector storage and the local docstore (scales with document volume)
+- HuggingFace Hub token only required if accessing gated models
 
-```
+Key runtime dependencies (see `requirements.txt` for pinned versions):
 
-You can simply change that docstring to: `...which is critical for accurate data extraction.`
+- `torch` — required by `sentence-transformers` for embedding inference
+- `sentence-transformers` / `transformers` — embedding runtime
+- `langchain`, `langchain-groq`, `langchain-qdrant`, `langchain-huggingface` — RAG stack
+- `qdrant-client` — local vector database
+- `chainlit` — streaming chat UI
+- `rich` — terminal UI for the ingestion CLI
+- `fpdf2` — demo PDF generation
+- `pydantic` — structured metadata extraction schema
+- `tenacity` — retry logic for LLM API calls
+
+---
+
+## Known Limitations
+
+AlphaRAG is an actively developed project. The following constraints apply to the current
+implementation:
+
+- **Local Qdrant only** — the vector store runs as a local file-based instance; no distributed
+  or cloud Qdrant deployment is configured
+- **PDF-only ingestion** — only `.pdf` files are supported; other document formats require
+  additional loaders
+- **Single-node architecture** — no horizontal scaling or load balancing
+- **No authentication or multi-user isolation** — all users of a running Chainlit instance share
+  the same vector store and session context
+- **No OCR pipeline** — scanned or image-based PDFs without embedded text will not be parsed
+  correctly
+- **No hybrid reranking** — retrieval relies on dense vector search only; BM25 or cross-encoder
+  reranking is not yet implemented
+- **Metadata key consistency** — `ingest.py` verification references `author_or_company` while
+  `app.py` references `author`; ensure the Pydantic schema in `src/document_parser.py` uses a
+  single canonical key across both
+
+---
+
