@@ -1,5 +1,5 @@
 # ==============================================================================
-# AlphaRAG: Institutional Knowledge Extractor — Python Dependencies
+# AlphaRAG: General Document Assistant — Python Dependencies
 # ==============================================================================
 langchain>=0.3.0,<0.4.0
 langchain-core>=0.3.0,<0.4.0
