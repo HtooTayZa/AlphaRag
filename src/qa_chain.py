@@ -72,22 +72,39 @@ def build_prompt() -> ChatPromptTemplate:
 
 def _format_docs_for_display(docs: list[Document]) -> list[dict[str, Any]]:
     formatted: list[dict[str, Any]] = []
-    for i, doc in enumerate(docs):
+    seen_pages = set()
+    
+    display_index = 1
+    for doc in docs:
         meta = doc.metadata or {}
-        formatted.append({
-            "index": i + 1,
-            "content": doc.page_content,
-            "preview": doc.page_content[:200].strip() + ("…" if len(doc.page_content) > 200 else ""),
-            "metadata": {
-                # Map to the NEW Pydantic fields
-                "title": meta.get("title", "Unknown Title"),
-                "author": meta.get("author_or_company", "Unknown"),
-                "document_type": meta.get("document_type", "Unknown"),
-                "date": meta.get("date_or_year", "Unknown"),
-                "source": meta.get("source", "Unknown"),
-                "page": str(meta.get("page_number", meta.get("page", "N/A"))),
-            },
-        })
+        
+        # 1. Extract identification data
+        source_file = meta.get("source", "Unknown")
+        page_num = str(meta.get("page_number", meta.get("page", "N/A")))
+        
+        # 2. Create a unique identifier: (Filename, Page Number)
+        identifier = (source_file, page_num)
+        
+        # 3. Deduplicate UI rendering by Page
+        if identifier not in seen_pages:
+            seen_pages.add(identifier)
+            
+            formatted.append({
+                "index": display_index,
+                "content": doc.page_content,
+                "preview": doc.page_content[:200].strip() + ("…" if len(doc.page_content) > 200 else ""),
+                "metadata": {
+                    # Map to the NEW Pydantic fields
+                    "title": meta.get("title", "Unknown Title"),
+                    "author": meta.get("author_or_company", "Unknown"),
+                    "document_type": meta.get("document_type", "Unknown"),
+                    "date": meta.get("date_or_year", "Unknown"),
+                    "source": source_file,
+                    "page": page_num,
+                },
+            })
+            display_index += 1
+            
     return formatted
 
 def build_rag_chain(retriever: ParentDocumentRetriever) -> Runnable:
