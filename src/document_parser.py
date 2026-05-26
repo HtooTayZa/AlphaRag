@@ -10,7 +10,7 @@ using an LLM, chunking text using a Parent-Child strategy, and persisting data r
 """
 
 from __future__ import annotations
-
+import functools
 import json
 import logging
 from pathlib import Path
@@ -151,7 +151,6 @@ def build_embeddings() -> HuggingFaceEmbeddings:
     return HuggingFaceEmbeddings(
         model_name=config.EMBEDDING_MODEL_NAME,
         model_kwargs={
-            "device": config.EMBEDDING_DEVICE,
             **({"token": hf_token} if hf_token else {}),
         },
         encode_kwargs={
@@ -259,7 +258,7 @@ def ingest_documents(pdf_dir: Path | None = None) -> tuple[ParentDocumentRetriev
 
     return retriever, docstore
 
-
+@functools.lru_cache(maxsize=1)
 def load_retriever_for_query() -> ParentDocumentRetriever:
     """Reconstruct the retriever for query mode (called by app.py at startup)."""
     logger.info("  🔌 Connecting to existing Qdrant and Local DocStore...")
