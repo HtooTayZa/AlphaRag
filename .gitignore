@@ -1,10 +1,18 @@
+# Environments
 .env
-__pycache__/
-*.pyc
 venv/
 env/
 .venv/
-data/raw_filings/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Data & Databases (DO NOT COMMIT)
+data/raw_pdfs/
 data/qdrant_db/
+data/local_docstore/
+
+# App & IDE Configs
 .chainlit/
-.vscode
+.vscode/
