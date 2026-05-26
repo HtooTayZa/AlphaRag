@@ -50,7 +50,7 @@ def build_llm() -> ChatGroq:
         model=config.LLM_MODEL_NAME,
         temperature=config.LLM_TEMPERATURE,
         max_tokens=config.LLM_MAX_TOKENS,
-        streaming=True,  # Enables token-by-token generation for the UI
+        streaming=True,  
     )
 
 

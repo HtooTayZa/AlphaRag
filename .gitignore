@@ -8,7 +8,7 @@ env/
 __pycache__/
 *.pyc
 
-# Data & Databases (DO NOT COMMIT)
+# Data & Databases 
 data/raw_pdfs/
 data/qdrant_db/
 data/local_docstore/

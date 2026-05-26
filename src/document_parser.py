@@ -23,11 +23,10 @@ from langchain.storage.encoder_backed import EncoderBackedStore
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant import QdrantVectorStore
+from langchain_qdrant import QdrantVectorStore, FastEmbedSparse
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
-
 from src import config
 
 logger = logging.getLogger(__name__)
@@ -143,26 +142,8 @@ def build_text_splitters() -> tuple[RecursiveCharacterTextSplitter, RecursiveCha
 # Model & Storage Initialisation
 # ==============================================================================
 
-def build_embeddings() -> HuggingFaceEmbeddings:
-    """Instantiate the HuggingFace embedding model."""
-    hf_token = config.get_hf_token()
-    logger.info(f"  🔢 Loading embedding model: {config.EMBEDDING_MODEL_NAME}")
-
-    return HuggingFaceEmbeddings(
-        model_name=config.EMBEDDING_MODEL_NAME,
-        model_kwargs={
-            **({"token": hf_token} if hf_token else {}),
-        },
-        encode_kwargs={
-            "normalize_embeddings": True,
-            "batch_size": 32,
-        }
-        # Removed query_instruction as it is no longer supported in this class version
-    )
-
-
 def build_qdrant_vector_store(embeddings: HuggingFaceEmbeddings) -> QdrantVectorStore:
-    """Initialize or reconnect to the Qdrant collection for child vectors."""
+    """Initialize or reconnect to the Qdrant collection supporting hybrid search."""
     config.QDRANT_PATH.mkdir(parents=True, exist_ok=True)
 
     if config.QDRANT_URL:
@@ -174,18 +155,38 @@ def build_qdrant_vector_store(embeddings: HuggingFaceEmbeddings) -> QdrantVector
 
     existing_collections = [c.name for c in client.get_collections().collections]
     if config.COLLECTION_NAME not in existing_collections:
-        logger.info(f"  🆕 Creating Qdrant collection: '{config.COLLECTION_NAME}'")
+        logger.info(f"  🆕 Creating Hybrid Qdrant collection: '{config.COLLECTION_NAME}'")
+        
+        # Configure both dense and sparse configurations for hybrid capabilities
+        from qdrant_client.http.models import SparseVectorParams, Modifier
+        
         client.create_collection(
             collection_name=config.COLLECTION_NAME,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+            sparse_vectors_config={
+                "sparse-text": SparseVectorParams(
+                    index=None,
+                    modifier=Modifier.IDF
+                )
+            }
         )
     else:
         logger.info(f"  ♻️  Reusing existing Qdrant collection: '{config.COLLECTION_NAME}'")
 
+    # Instantiate the fast sparse token generation module 
+    sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+
+    # Return the store fully configured with BOTH tracking models
+    from langchain_qdrant import RetrievalMode
+
     return QdrantVectorStore(
         client=client, 
         collection_name=config.COLLECTION_NAME, 
-        embedding=embeddings
+        embedding=embeddings,
+        sparse_embedding=sparse_embeddings, 
+        vector_name="dense",
+        sparse_vector_name="sparse-text",
+        retrieval_mode=RetrievalMode.HYBRID
     )
 
 

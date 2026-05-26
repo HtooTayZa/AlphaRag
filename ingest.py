@@ -133,7 +133,7 @@ def run_verification(retriever: object, query: str) -> None:
     try:
         # get_relevant_documents performs: embed → ANN → parent lookup
         start = time.perf_counter()
-        docs = retriever.get_relevant_documents(query)  # type: ignore[attr-defined]
+        docs = retriever.get_relevant_documents(query) 
         elapsed = time.perf_counter() - start
 
         if not docs:
