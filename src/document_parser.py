@@ -1,32 +1,32 @@
 # src/document_parser.py
 # ==============================================================================
-# AlphaRAG: Document Parsing & Parent-Child Retriever Construction
+# AlphaRAG: Dynamic Document Parsing & In-Memory Retrieval
 # ==============================================================================
 """
-Document parsing, chunking, and persistence orchestration.
+Document parsing, chunking, and session-scoped retrieval orchestration.
 
-This module is responsible for loading PDFs, automatically extracting metadata 
-using an LLM, chunking text using a Parent-Child strategy, and persisting data robustly.
+This module loads dynamically uploaded PDFs, extracts metadata, 
+chunks text, and stores vectors/documents in isolated in-memory stores.
 """
 
 from __future__ import annotations
-import functools
-import json
+
 import logging
-from pathlib import Path
+import uuid
+from typing import Any
 
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
 from langchain.retrievers import ParentDocumentRetriever
-from langchain.storage import LocalFileStore
-from langchain.storage.encoder_backed import EncoderBackedStore
+from langchain.storage import InMemoryStore
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant import QdrantVectorStore, FastEmbedSparse
+from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import Distance, VectorParams, SparseVectorParams, Modifier
+
 from src import config
 
 logger = logging.getLogger(__name__)
@@ -40,13 +40,12 @@ class DocumentMetadata(BaseModel):
     """Schema for extracting metadata from the first page of any document."""
     title: str = Field(description="The main title or subject of the document")
     author_or_company: str = Field(description="The author, company, or organization that created the document")
-    document_type: str = Field(description="The type or category of the document (e.g., Report, Essay, Legal Contract, Manual)")
+    document_type: str = Field(description="The type or category of the document")
     date_or_year: str = Field(description="The date or year mentioned, otherwise 'Unknown'")
 
 def extract_metadata_with_llm(page_content: str) -> dict[str, str]:
     """
     Uses the Groq LLM to extract structured metadata from the first page of a document.
-    Falls back to generic metadata if the API call fails.
     """
     try:
         llm = ChatGroq(
@@ -55,7 +54,6 @@ def extract_metadata_with_llm(page_content: str) -> dict[str, str]:
             temperature=0
         ).with_structured_output(DocumentMetadata)
         
-        # Pass only the first 2000 characters to save tokens and speed up extraction
         prompt = f"Extract the following metadata from this document snippet:\n\n{page_content[:2000]}"
         extracted_obj = llm.invoke(prompt)
         
@@ -75,47 +73,31 @@ def extract_metadata_with_llm(page_content: str) -> dict[str, str]:
 # PDF Loading & Chunking
 # ==============================================================================
 
-def load_pdfs_from_directory(pdf_dir: Path) -> list[Document]:
+def load_single_pdf(file_path: str, original_name: str) -> list[Document]:
     """
-    Load all PDF files from a directory, enriching pages with automated LLM metadata.
+    Load a single dynamically uploaded PDF and extract metadata.
     """
-    if not pdf_dir.exists():
-        raise FileNotFoundError(f"[DocumentParser] PDF directory not found: {pdf_dir}")
+    logger.info(f"  📄 Loading and analyzing uploaded file: {original_name}")
+    
+    loader = PyPDFLoader(file_path)
+    pages = loader.load()
 
-    pdf_files = sorted(pdf_dir.glob("*.pdf"))
-    if not pdf_files:
-        raise ValueError(f"[DocumentParser] No PDF files found in: {pdf_dir}")
+    if pages:
+        # AUTOMATED EXTRACTION: Run on the first page only
+        first_page_text = pages[0].page_content
+        metadata = extract_metadata_with_llm(first_page_text)
+        
+        # Always append the actual original filename
+        metadata["source"] = original_name
 
-    all_documents: list[Document] = []
-
-    for pdf_path in pdf_files:
-        logger.info(f"  📄 Loading and analyzing: {pdf_path.name}")
-
-        try:
-            loader = PyPDFLoader(str(pdf_path))
-            pages = loader.load()
-
-            # AUTOMATED EXTRACTION: Run on the first page only
-            first_page_text = pages[0].page_content
-            metadata = extract_metadata_with_llm(first_page_text)
+        # Attach the extracted metadata to every page of this document
+        for page_doc in pages:
+            page_doc.metadata.update(metadata)
+            page_doc.metadata["page_number"] = page_doc.metadata.get("page", "N/A")
             
-            # Always append the actual filename
-            metadata["source"] = pdf_path.name
+        logger.info(f"  ✅ Extracted metadata: {metadata['title']} by {metadata['author_or_company']}")
 
-            # Attach the extracted metadata to every page of this document
-            for page_doc in pages:
-                page_doc.metadata.update(metadata)
-                page_doc.metadata["page_number"] = page_doc.metadata.get("page", "N/A")
-
-            all_documents.extend(pages)
-            logger.info(f"  ✅ Extracted metadata: {metadata['title']} by {metadata['author_or_company']}")
-
-        except Exception as exc:
-            logger.error(f"  ❌ Failed to load '{pdf_path.name}': {exc}", exc_info=True)
-
-    logger.info(f"  📚 Total pages loaded: {len(all_documents)}")
-    return all_documents
-
+    return pages
 
 def build_text_splitters() -> tuple[RecursiveCharacterTextSplitter, RecursiveCharacterTextSplitter]:
     """Construct the Parent and Child RecursiveCharacterTextSplitters."""
@@ -139,86 +121,45 @@ def build_text_splitters() -> tuple[RecursiveCharacterTextSplitter, RecursiveCha
 
 
 # ==============================================================================
-# Model & Storage Initialisation
+# In-Memory Model & Storage Initialisation
 # ==============================================================================
 
-def build_qdrant_vector_store(embeddings: HuggingFaceEmbeddings) -> QdrantVectorStore:
-    """Initialize or reconnect to the Qdrant collection supporting hybrid search."""
-    config.QDRANT_PATH.mkdir(parents=True, exist_ok=True)
+def build_memory_qdrant(embeddings: HuggingFaceEmbeddings, collection_name: str) -> QdrantVectorStore:
+    """Initialize an isolated in-memory Qdrant instance for the session."""
+    logger.info(f"  🧠 Creating In-Memory Qdrant collection: '{collection_name}'")
+    
+    # Use :memory: for strict session isolation
+    client = QdrantClient(location=":memory:")
+    
+    client.create_collection(
+        collection_name=collection_name,
+        # FIX: Pass a dictionary mapping the name "dense" to the VectorParams
+        vectors_config={
+            "dense": VectorParams(size=384, distance=Distance.COSINE)
+        },
+        sparse_vectors_config={
+            "sparse-text": SparseVectorParams(
+                index=None,
+                modifier=Modifier.IDF
+            )
+        }
+    )
 
-    if config.QDRANT_URL:
-        logger.info(f"  ☁️  Connecting to Qdrant Cloud: {config.QDRANT_URL}")
-        client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY, timeout=60)
-    else:
-        logger.info(f"  💾 Using local Qdrant at: {config.QDRANT_PATH}")
-        client = QdrantClient(path=str(config.QDRANT_PATH))
-
-    existing_collections = [c.name for c in client.get_collections().collections]
-    if config.COLLECTION_NAME not in existing_collections:
-        logger.info(f"  🆕 Creating Hybrid Qdrant collection: '{config.COLLECTION_NAME}'")
-        
-        # Configure both dense and sparse configurations for hybrid capabilities
-        from qdrant_client.http.models import SparseVectorParams, Modifier
-        
-        client.create_collection(
-            collection_name=config.COLLECTION_NAME,
-            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
-            sparse_vectors_config={
-                "sparse-text": SparseVectorParams(
-                    index=None,
-                    modifier=Modifier.IDF
-                )
-            }
-        )
-    else:
-        logger.info(f"  ♻️  Reusing existing Qdrant collection: '{config.COLLECTION_NAME}'")
-
-    # Instantiate the fast sparse token generation module 
     sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
-
-    # Return the store fully configured with BOTH tracking models
-    from langchain_qdrant import RetrievalMode
 
     return QdrantVectorStore(
         client=client, 
-        collection_name=config.COLLECTION_NAME, 
+        collection_name=collection_name, 
         embedding=embeddings,
         sparse_embedding=sparse_embeddings, 
-        vector_name="dense",
+        vector_name="dense",            
         sparse_vector_name="sparse-text",
         retrieval_mode=RetrievalMode.HYBRID
     )
 
-
-def build_local_docstore() -> EncoderBackedStore:
-    """Build a persistent, JSON-encoded local document store."""
-    config.LOCAL_DOCSTORE_PATH.mkdir(parents=True, exist_ok=True)
-    file_store = LocalFileStore(str(config.LOCAL_DOCSTORE_PATH))
-    
-    def _doc_to_bytes(doc: Document) -> bytes:
-        return json.dumps({
-            "page_content": doc.page_content, 
-            "metadata": doc.metadata
-        }).encode("utf-8")
-        
-    def _bytes_to_doc(b: bytes) -> Document:
-        data = json.loads(b.decode("utf-8"))
-        return Document(
-            page_content=data["page_content"], 
-            metadata=data["metadata"]
-        )
-        
-    return EncoderBackedStore(
-        store=file_store,
-        key_encoder=lambda x: str(x),
-        value_serializer=_doc_to_bytes,
-        value_deserializer=_bytes_to_doc,
-    )
-
-
 def build_parent_document_retriever(
     vector_store: QdrantVectorStore, 
-    docstore: EncoderBackedStore
+    docstore: InMemoryStore
 ) -> ParentDocumentRetriever:
     """Assemble the ParentDocumentRetriever."""
     parent_splitter, child_splitter = build_text_splitters()
@@ -236,35 +177,36 @@ def build_parent_document_retriever(
 # High-Level Orchestration
 # ==============================================================================
 
-def ingest_documents(pdf_dir: Path | None = None) -> tuple[ParentDocumentRetriever, EncoderBackedStore]:
-    """Full ingestion pipeline: load PDFs, split text, embed, and store persistently."""
-    pdf_dir = pdf_dir or config.RAW_PDFS_DIR
-
+def ingest_uploaded_file(file_path: str, original_name: str) -> ParentDocumentRetriever:
+    """Full in-memory ingestion pipeline for a dynamically uploaded file."""
     logger.info("=" * 60)
-    logger.info("  AlphaRAG — Document Ingestion Pipeline")
+    logger.info(f"  AlphaRAG — Processing Session File: {original_name}")
     logger.info("=" * 60)
 
-    documents = load_pdfs_from_directory(pdf_dir)
-    embeddings = build_embeddings()
-    vector_store = build_qdrant_vector_store(embeddings)
-    docstore = build_local_docstore()
-
-    logger.info("\n[Step 4/4] Building Retriever and indexing chunks...")
-    retriever = build_parent_document_retriever(vector_store, docstore)
+    # 1. Load and parse the PDF
+    documents = load_single_pdf(file_path, original_name)
     
+    # 2. Setup Embeddings
+    logger.info("  ⚙️  Initializing Embeddings...")
+    embeddings = HuggingFaceEmbeddings(
+        model_name=config.EMBEDDING_MODEL_NAME,
+        model_kwargs={"device": config.EMBEDDING_DEVICE}
+    )
+    
+    # 3. Create a unique session ID for Qdrant isolation
+    session_id = uuid.uuid4().hex
+    unique_collection = f"docs_{session_id}"
+    
+    # 4. Initialize In-Memory Stores
+    vector_store = build_memory_qdrant(embeddings, unique_collection)
+    docstore = InMemoryStore() 
+    
+    # 5. Build Retriever and Index Chunks
+    logger.info("  📊 Building Retriever and indexing chunks...")
+    retriever = build_parent_document_retriever(vector_store, docstore)
     retriever.add_documents(documents, ids=None)
 
-    logger.info("\n✅ Ingestion complete and persisted locally!")
+    logger.info("  ✅ Ingestion complete and ready for query!")
     logger.info("=" * 60)
 
-    return retriever, docstore
-
-@functools.lru_cache(maxsize=1)
-def load_retriever_for_query() -> ParentDocumentRetriever:
-    """Reconstruct the retriever for query mode (called by app.py at startup)."""
-    logger.info("  🔌 Connecting to existing Qdrant and Local DocStore...")
-    embeddings = build_embeddings()
-    vector_store = build_qdrant_vector_store(embeddings)
-    docstore = build_local_docstore()
-    
-    return build_parent_document_retriever(vector_store, docstore)
+    return retriever

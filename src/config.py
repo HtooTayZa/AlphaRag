@@ -1,12 +1,12 @@
+# src/config.py
 # ==============================================================================
 # AlphaRAG: Centralized Configuration
 # ==============================================================================
 """
 Central configuration module for AlphaRAG.
 
-This module loads environment variables, defines system-wide constants, file paths, 
-model parameters, and core prompts. Centralizing these values ensures consistency 
-across ingestion, retrieval, and UI layers.
+This module loads environment variables, defines system-wide constants, 
+model parameters, and core prompts.
 """
 
 from __future__ import annotations
@@ -19,23 +19,11 @@ from dotenv import load_dotenv
 # Load .env file values into the environment at import time.
 load_dotenv()
 
-
-# ------------------------------------------------------------------------------
-# Project Paths
-# ------------------------------------------------------------------------------
-
 # Root of the alpharag/ project directory
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
-# Where raw PDF filings are stored prior to ingestion
-RAW_PDFS_DIR: Path = PROJECT_ROOT / "data" / "raw_pdfs"
-
-# Vector storage path: Qdrant persists its on-disk index here
-QDRANT_PATH: Path = PROJECT_ROOT / "data" / "qdrant_db"
-
-# Document storage path: Local fallback for LangChain's docstore to persist parent chunks
-LOCAL_DOCSTORE_PATH: Path = PROJECT_ROOT / "data" / "local_docstore"
-
+# Note: Static storage paths (RAW_PDFS_DIR, QDRANT_PATH, etc.) have been removed
+# as the application now relies on session-scoped in-memory storage.
 
 # ------------------------------------------------------------------------------
 # API Keys & Credentials
@@ -44,15 +32,6 @@ LOCAL_DOCSTORE_PATH: Path = PROJECT_ROOT / "data" / "local_docstore"
 def _require_env(key: str) -> str:
     """
     Fetch a required environment variable or raise a descriptive error.
-    
-    Args:
-        key: The name of the environment variable.
-        
-    Returns:
-        The string value of the environment variable.
-        
-    Raises:
-        EnvironmentError: If the variable is missing or empty.
     """
     value = os.environ.get(key)
     if not value:
@@ -67,15 +46,8 @@ def get_groq_api_key() -> str:
     return _require_env("GROQ_API_KEY")
 
 def get_hf_token() -> str | None:
-    """
-    Retrieve the HuggingFace token. 
-    Optional for public models, but recommended to avoid rate limits.
-    """
+    """Retrieve the HuggingFace token."""
     return os.environ.get("HUGGINGFACE_HUB_TOKEN")
-
-# Optional Qdrant Cloud overrides — falls back to local embedded mode if absent
-QDRANT_URL: str | None = os.environ.get("QDRANT_URL")
-QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY")
 
 
 # ------------------------------------------------------------------------------
@@ -83,29 +55,17 @@ QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY")
 # ------------------------------------------------------------------------------
 
 # --- LLM (Groq) ---
-# Optimized for Groq's Free Tier to ensure maximum stability and speed
 LLM_MODEL_NAME: str = os.environ.get("LLM_MODEL_NAME", "llama-3.1-8b-instant")
-LLM_TEMPERATURE: float = 0.0          # Keeps output deterministic and strictly grounded
+LLM_TEMPERATURE: float = 0.0          
 LLM_MAX_TOKENS: int = 2048
 
 # --- Embeddings (HuggingFace) ---
-# Default: MiniLM-L6-v2 
 EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DEVICE: str = os.environ.get("EMBEDDING_DEVICE", "cpu")
-
-# BGE models require a specific query instruction prefix to optimize retrieval
-BGE_QUERY_INSTRUCTION: str = ""
-
-# --- Vector Store ---
-COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "alpharag_general_docs")
 
 
 # ------------------------------------------------------------------------------
 # Parent-Child Chunking Strategy
-# ------------------------------------------------------------------------------
-# Architecture overview:
-# 1. Broad PARENT chunks (~1500 chars) are stored on disk. They provide the LLM with context.
-# 2. Dense CHILD chunks (~200 chars) are stored in Qdrant. They optimize vector search accuracy.
 # ------------------------------------------------------------------------------
 
 PARENT_CHUNK_SIZE: int = int(os.environ.get("PARENT_CHUNK_SIZE", "1500"))
@@ -122,7 +82,6 @@ TOP_K_RETRIEVAL: int = 6
 # System Prompt & Guardrails
 # ------------------------------------------------------------------------------
 
-# The guardrail prompt prevents hallucinations and enforces exact citation tracking.
 SYSTEM_PROMPT: str = (
     "You are a helpful, precise AI assistant. "
     "Your task is to answer user queries based ONLY on the provided context. "
@@ -136,5 +95,5 @@ SYSTEM_PROMPT: str = (
 
 # Application Identity
 APP_NAME: str = "AlphaRAG"
-APP_TAGLINE: str = "General Document Assistant"
-APP_VERSION: str = "1.0.0"
+APP_TAGLINE: str = "Dynamic Document Assistant"
+APP_VERSION: str = "2.0.0"

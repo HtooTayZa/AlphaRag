@@ -8,11 +8,6 @@ env/
 __pycache__/
 *.pyc
 
-# Data & Databases 
-data/raw_pdfs/
-data/qdrant_db/
-data/local_docstore/
-
 # App & IDE Configs
 .chainlit/
 .vscode/

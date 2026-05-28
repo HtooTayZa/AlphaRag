@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # app.py
 # ==============================================================================
-# AlphaRAG: Chainlit UI Entry Point
+# AlphaRAG: Chainlit UI Entry Point (Dynamic Ingestion)
 # ==============================================================================
 """
 User Interface layer for AlphaRAG, powered by Chainlit.
 
-This module handles session initialization and message orchestration. It consumes
-the async token generator from `src/qa_chain.py` to stream responses to the user 
-in real-time and constructs interactive citation sidebars.
+This module handles session initialization and message orchestration. 
+It prompts the user to upload a PDF, ingests it in-memory, and streams
+responses to the user in real-time with interactive citation sidebars.
 """
 
 from __future__ import annotations
@@ -21,56 +21,63 @@ import chainlit as cl
 from langchain_core.runnables import Runnable
 
 from src import config
-from src.document_parser import load_retriever_for_query
+from src.document_parser import ingest_uploaded_file
 from src.qa_chain import astream_query, build_rag_chain
 
 logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
-# Session Initialisation
+# Session Initialisation & File Upload
 # ==============================================================================
 
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """
     Triggered when a user opens a new chat session.
-    Initialises the retrieval engine and RAG chain, storing them in the session.
+    Prompts for a PDF upload, then initializes the retrieval engine in-memory.
     """
-    await cl.Message(
-        content=(
-            f"## 🤖 {config.APP_NAME}: {config.APP_TAGLINE}\n\n"
-            "Welcome. I have access to your indexed documents.\n"
-            "Ask me any question, and I will extract and synthesize accurate "
-            "information from the provided context.\n\n"
-            "---\n"
-            "*Initialising retrieval engine…*"
-        ),
+    # 1. Ask the user for a file
+    files = None
+    while files is None:
+        files = await cl.AskFileMessage(
+            content=(
+                f"## 🤖 {config.APP_NAME}: {config.APP_TAGLINE}\n\n"
+                "Welcome! Please upload a PDF document to begin. I will extract its contents "
+                "and allow you to query it instantly."
+            ),
+            accept=["application/pdf"],
+            max_size_mb=50,
+            timeout=180,
+        ).send()
+
+    # 2. Get the uploaded file
+    file = files[0]
+    
+    # Send a processing message
+    msg = cl.Message(
+        content=f"⚙️ Processing `{file.name}`... Extracting metadata and building vector space.",
         author=config.APP_NAME,
-    ).send()
+    )
+    await msg.send()
 
     try:
-        # Initialise connections to Qdrant and Local DocStore asynchronously
-        retriever = await cl.make_async(load_retriever_for_query)()
+        # 3. Dynamically ingest the uploaded file into an in-memory store
+        retriever = await cl.make_async(ingest_uploaded_file)(file.path, file.name)
+        
+        # 4. Build the RAG chain with the session-specific retriever
         rag_chain = await cl.make_async(build_rag_chain)(retriever)
         
         # Persist across the user's session
         cl.user_session.set("rag_chain", rag_chain)
         
-        await cl.Message(
-            content="**Ready.** Ask me anything about your documents.",
-            author=config.APP_NAME,
-        ).send()
+        msg.content = f"✅ **`{file.name}` successfully ingested!**\n\nAsk me anything about the document."
+        await msg.update()
         
-    except FileNotFoundError as e:
-        await cl.Message(
-            content=f"**Storage not found.** Run `python ingest.py` first.\n\n`{e}`"
-        ).send()
     except Exception as e:
         logger.exception("Initialisation failed")
-        await cl.Message(
-            content=f"❌ **Initialisation error:**\n\n```\n{e}\n```"
-        ).send()
+        msg.content = f"❌ **Error processing document:**\n\n```\n{e}\n```"
+        await msg.update()
 
 
 # ==============================================================================
@@ -85,7 +92,7 @@ async def on_message(message: cl.Message) -> None:
     """
     rag_chain: Runnable | None = cl.user_session.get("rag_chain")
     if not rag_chain:
-        await cl.Message(content="⚠️ Session not initialised. Please refresh the page.").send()
+        await cl.Message(content="⚠️ Session not initialised. Please refresh the page and upload a file.").send()
         return
 
     user_query = message.content.strip()
@@ -119,8 +126,6 @@ async def on_message(message: cl.Message) -> None:
     # 3. Post-Generation: Build Sidebar Elements & Citation Footer
     elements: list[cl.Text] = []
     source_lines: list[str] = []
-
-    # In app.py (inside on_message)
 
     for source in sources:
         idx = source["index"]
