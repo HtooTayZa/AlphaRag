@@ -42,7 +42,7 @@ AlphaRAG utilizes a dynamic, session-scoped architecture. Documents are uploaded
 │                                       Streamed answer + citations       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
-````
+
 
 ---
 
