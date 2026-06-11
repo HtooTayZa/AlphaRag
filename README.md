@@ -1,6 +1,3 @@
-Here is the updated `README.md` to reflect the new dynamic, in-memory, multi-user architecture. All references to the obsolete CLI ingestion script and static local storage have been removed.
-
-````markdown
 # AlphaRAG: Dynamic Document Assistant
 
 > Document question-answering powered by Parent-Child RAG, automated LLM metadata extraction,
